@@ -22,6 +22,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+
+	"github.com/spartan563/udp-router/internal/pkg/netmap"
 
 	"github.com/spartan563/udp-router/internal/pkg/protocol"
 	"github.com/spartan563/udp-router/internal/pkg/router"
@@ -57,7 +61,24 @@ var runCmd = &cobra.Command{
 			return
 		}
 
+		routes := []netmap.Route{}
+		if err := viper.UnmarshalKey("routes", &routes); err != nil {
+			logrus.WithError(err).Error("failed to configure default routes")
+			return
+		}
+
+		for _, route := range routes {
+			rtr.AddRoute(route)
+		}
+
 		rtr.Run()
+
+		sigCh := make(chan os.Signal)
+		signal.Notify(sigCh, os.Kill)
+
+		<-sigCh
+
+		rtr.Shutdown()
 	},
 }
 

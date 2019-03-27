@@ -1,0 +1,14 @@
+---
+id: 2
+port: 10002
+
+routes:
+  - source: 2
+    dest: 1
+    cost: 3
+    port: 10001
+    
+  - source: 2
+    dest: 3
+    cost: 2
+    port: 10003

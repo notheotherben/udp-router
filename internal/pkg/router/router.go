@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -16,6 +17,8 @@ type Router struct {
 	address protocol.Address
 	netmap  *netmap.Map
 	conn    net.PacketConn
+
+	shutdown chan struct{}
 }
 
 func New(listen string, address protocol.Address) (*Router, error) {
@@ -34,7 +37,28 @@ func New(listen string, address protocol.Address) (*Router, error) {
 }
 
 func (r *Router) Run() {
-	r.receiveLoop()
+	if r.shutdown != nil {
+		close(r.shutdown)
+	}
+	r.shutdown = make(chan struct{})
+	go r.receiveLoop()
+	go r.publishLoop()
+}
+
+func (r *Router) Shutdown() {
+	close(r.shutdown)
+	r.shutdown = nil
+}
+
+func (r *Router) AddRoute(route netmap.Route) {
+	diff := r.netmap.Update(route)
+
+	publishList := []netmap.Route{}
+	for _, vr := range diff {
+		publishList = append(publishList, vr.Route())
+	}
+
+	r.publishRoutes(publishList)
 }
 
 func (r *Router) send(packet *protocol.Packet, via netmap.Route) error {
@@ -59,19 +83,35 @@ func (r *Router) send(packet *protocol.Packet, via netmap.Route) error {
 func (r *Router) receiveLoop() {
 	buf := make([]byte, 1024)
 	for {
-		n, _, err := r.conn.ReadFrom(buf)
-
-		if err != nil {
-			logrus.WithError(err).Error("failed to read packet")
+		select {
+		case _, _ = <-r.shutdown:
 			return
+		default:
+			n, _, err := r.conn.ReadFrom(buf)
+
+			if err != nil {
+				logrus.WithError(err).Error("failed to read packet")
+				return
+			}
+
+			//from := addr.(*net.UDPAddr).Port
+			// TODO: We need to propagate the source of packets to
+			//       the onPacket function
+
+			if n > 0 {
+				go r.onPacket(buf[:n])
+			}
 		}
+	}
+}
 
-		//from := addr.(*net.UDPAddr).Port
-		// TODO: We need to propagate the source of packets to
-		//       the onPacket function
-
-		if n > 0 {
-			go r.onPacket(buf[:n])
+func (r *Router) publishLoop() {
+	for {
+		select {
+		case <-r.shutdown:
+			return
+		case <-time.After(10 * time.Second):
+			r.publishRoutes(r.netmap.Routes())
 		}
 	}
 }
@@ -126,39 +166,42 @@ func (r *Router) onControlPacket(packet *protocol.Packet) {
 		logrus.WithFields(logrus.Fields{
 			"source":  packet.Source,
 			"payload": fmt.Sprintf("%d -> %d costs %d (port %d)", update.Source, update.Dest, update.Cost, update.Port),
-		}).Info("received network update")
+		}).Debug("received network update")
 
-		diff := r.netmap.Update(netmap.Route{
+		r.AddRoute(netmap.Route{
 			Source: update.Source,
 			Dest:   update.Dest,
 			Port:   update.Port,
 			Cost:   update.Cost,
 		})
+	}
+}
 
-		ns := r.netmap.Neighbours()
-		for _, vr := range diff {
-			for _, n := range ns {
-				p := protocol.Packet{
-					PacketHeader: protocol.PacketHeader{
-						Source:  r.address,
-						Dest:    n.Dest,
-						Type:    protocol.ControlPacketType,
-						Subtype: protocol.PathAdvertisementSubtype,
-					},
-					Payload: &protocol.PathAdvertisement{
-						Source: vr.Source,
-						Dest:   vr.Dest,
-						Cost:   vr.EstCost,
-						Port:   vr.Via.Port,
-					},
-				}
+func (r *Router) publishRoutes(routes []netmap.Route) {
+	ns := r.netmap.Neighbours()
+	for _, ru := range routes {
+		for _, n := range ns {
+			p := protocol.Packet{
+				PacketHeader: protocol.PacketHeader{
+					Source:  r.address,
+					Dest:    n.Dest,
+					Type:    protocol.ControlPacketType,
+					Subtype: protocol.PathAdvertisementSubtype,
+				},
+				Payload: &protocol.PathAdvertisement{
+					Source: ru.Source,
+					Dest:   ru.Dest,
+					Cost:   ru.Cost,
+					Port:   ru.Port,
+				},
+			}
 
-				if err := r.send(&p, n); err != nil {
-					logrus.WithFields(logrus.Fields{
-						"neighbour": n.Dest,
-						"port":      n.Port,
-					}).WithError(err).Warning("failed to propagate route update")
-				}
+			if err := r.send(&p, n); err != nil {
+				logrus.WithFields(logrus.Fields{
+					"neighbour": n.Dest,
+					"port":      n.Port,
+					"update":    ru,
+				}).WithError(err).Warning("failed to propagate route update")
 			}
 		}
 	}

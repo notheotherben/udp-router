@@ -1,0 +1,9 @@
+---
+id: 3
+port: 10003
+
+routes:
+  - source: 3
+    dest: 2
+    cost: 1
+    port: 10003

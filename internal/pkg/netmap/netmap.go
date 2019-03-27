@@ -49,6 +49,15 @@ func New(root protocol.Address) *Map {
 	}
 }
 
+func (m *Map) Routes() []Route {
+	routes := []Route{}
+	for _, r := range m.routeTable {
+		routes = append(routes, r.Route())
+	}
+
+	return routes
+}
+
 func (m *Map) Neighbours() []Route {
 	out := []Route{}
 
@@ -75,6 +84,11 @@ func (m *Map) Update(route Route) map[protocol.Address]ViaRoute {
 
 	for i, r := range m.routes {
 		if r.Source == route.Source && r.Dest == route.Dest {
+			if r.Port == route.Port && r.Cost == route.Cost {
+				// No need to do a costly update if this doesn't have new info
+				return map[protocol.Address]ViaRoute{}
+			}
+
 			m.routes[i] = route
 			break
 		}
@@ -137,7 +151,7 @@ func (m *Map) Update(route Route) map[protocol.Address]ViaRoute {
 			"dest":    target,
 			"via":     route,
 			"estCost": dist[n],
-		}).Info("route table updated")
+		}).Debug("route table updated")
 
 		rt[target] = ViaRoute{
 			Source:  m.root,
