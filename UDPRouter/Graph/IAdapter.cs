@@ -1,4 +1,6 @@
-﻿namespace UDPRouter.Graph
+﻿using System.Collections.Generic;
+
+namespace UDPRouter.Graph
 {
     public interface IAdapter<T>
     {
