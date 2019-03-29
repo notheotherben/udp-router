@@ -27,7 +27,7 @@ namespace UDPRouter.Commands
             {
                 Source = Source,
                 Dest = Dest,
-                Port = Port,
+                Port = DestPort,
                 Cost = Cost,
             });
 
